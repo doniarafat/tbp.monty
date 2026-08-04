@@ -13,16 +13,17 @@ from pathlib import Path
 
 import numpy as np
 from omegaconf import DictConfig, OmegaConf
-from scipy.spatial.transform import Rotation
 
 from tbp.monty.context import RuntimeContext
-from tbp.monty.frameworks.environments.embodied_data import (
-    SaccadeOnImageEnvironmentInterface,
+from tbp.monty.experiment.environment import (
+    SaccadeOnImageInterface,
 )
+from tbp.monty.frameworks.actions.actions import Action
 from tbp.monty.frameworks.experiments.mode import ExperimentMode
 from tbp.monty.frameworks.experiments.monty_experiment import (
     MontyExperiment,
 )
+from tbp.monty.geometry import Rotation
 
 __all__ = ["MontySupervisedObjectPretrainingExperiment"]
 
@@ -53,16 +54,27 @@ class MontySupervisedObjectPretrainingExperiment(MontyExperiment):
 
     def setup_experiment(self, config):
         super().setup_experiment(config)
-        if "agents" in config["env_interface_config"]["env_init_args"]:
-            self.sensor_pos = np.array(
-                config["env_interface_config"]["env_init_args"]["agents"]["agent_args"][
-                    "positions"
-                ]
-            )
+        if "agents" in config["environment"]["env_init_args"]:
+            agents_config = config["environment"]["env_init_args"]["agents"]
+            # Habitat agents are configured using `agent_args`.
+            # The way we configure Habitat agents only allows for one agent.
+            if "agent_args" in agents_config:
+                self.sensor_pos = np.array(agents_config["agent_args"]["positions"])
+            else:
+                # MuJoCo agents are configured using a list of partially applied
+                # agent constructors.
+                # TODO: support more than one agent, this assumes there's only one.
+
+                # Introspect the first agent partial to determine what the
+                # original sensor positions were.
+                sensor_cfgs = agents_config[0].keywords["sensor_configs"]
+                self.sensor_pos = np.array(
+                    [sensor["position"] for sensor in sensor_cfgs.values()]
+                )
         else:
             self.sensor_pos = np.array([0, 0, 0])
 
-    def run_episode(self):
+    def run_episode(self) -> None:
         """Run a supervised episode on one object in one pose.
 
         In a supervised episode we only make exploratory steps (no object recognition
@@ -84,9 +96,30 @@ class MontySupervisedObjectPretrainingExperiment(MontyExperiment):
 
         # Collect data about the object (exploratory steps)
         num_steps = 0
+        actions: list[Action] = []
         while True:
+            observations, proprioceptive_state = self.env_interface.step(actions)
+
+            num_steps += 1
+            if self.show_sensor_output:
+                is_saccade_on_image_env_interface = isinstance(
+                    self.env_interface, SaccadeOnImageInterface
+                )
+                self.live_plotter.show_observations(
+                    *self.live_plotter.hardcoded_assumptions(observations, self.model),
+                    num_steps,
+                    is_saccade_on_image_env_interface,
+                )
             try:
-                observations = self.env_interface.step(ctx, first=(num_steps == 0))
+                actions = self.model.step(ctx, observations, proprioceptive_state)
+                actions = self._step_hook(
+                    ctx,
+                    self.model,
+                    self.supervised_lm_ids if self.supervised_lm_ids else [],
+                    num_steps,
+                    observations,
+                    actions,
+                )
             except StopIteration:
                 # TODO: StopIteration is being thrown by NaiveScanPolicy to signal
                 #       episode termination. This is a holdover from when we used
@@ -97,18 +130,6 @@ class MontySupervisedObjectPretrainingExperiment(MontyExperiment):
                 #       so the experiment can set max steps based on that knowledge
                 #       alone.
                 break
-
-            num_steps += 1
-            if self.show_sensor_output:
-                is_saccade_on_image_env_interface = isinstance(
-                    self.env_interface, SaccadeOnImageEnvironmentInterface
-                )
-                self.live_plotter.show_observations(
-                    *self.live_plotter.hardcoded_assumptions(observations, self.model),
-                    num_steps,
-                    is_saccade_on_image_env_interface,
-                )
-            self.model.step(observations)
             if self.model.is_done:
                 break
 
@@ -180,8 +201,9 @@ class MontySupervisedObjectPretrainingExperiment(MontyExperiment):
 
         self.reset_episode_rng()
 
-        # TODO: Fix invalid pre_episode signature call
-        self.model.pre_episode(self.rng, self.env_interface.primary_target)
+        self._restore_monty()
+
+        self.model.fixme_set_ground_truth(self.env_interface.primary_target)
         self.env_interface.pre_episode(self.rng)
 
         self.max_steps = self.max_train_steps  # no eval mode here
@@ -217,7 +239,7 @@ class MontySupervisedObjectPretrainingExperiment(MontyExperiment):
             self.run_epoch()
         self.logger_handler.post_train(self.logger_args)
         # Save only at the end of pretraining
-        self.save_state_dict(output_dir=self.output_dir)
+        self.save_state_dir(output_dir=self.output_dir)
 
     def evaluate(self):
         """Use experiment just for supervised pretraining -> no eval."""

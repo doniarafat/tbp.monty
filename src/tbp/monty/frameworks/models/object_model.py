@@ -7,6 +7,7 @@
 # Use of this source code is governed by the MIT
 # license that can be found in the LICENSE file or at
 # https://opensource.org/licenses/MIT.
+from __future__ import annotations
 
 import copy
 import logging
@@ -108,6 +109,21 @@ class GraphObjectModel(ObjectModel):
         self._graph = T.PointPairFeatures(cat=False)(self._graph)
         self.has_ppf = True
 
+    def edge_index_between(self, previous_node: int, new_node: int) -> int | None:
+        """Return the edge index between two nodes in a graph.
+
+        Args:
+            previous_node: Node ID of the first node in the graph.
+            new_node: Node ID of the second node in the graph.
+
+        Returns:
+            Edge ID between the two nodes, or None if no such edge exists.
+        """
+        mask = (self.edge_index[0] == previous_node) & (self.edge_index[1] == new_node)
+        if mask.any():
+            return mask.nonzero().view(-1)[0].item()
+        return None
+
     # ------------------ Getters & Setters ---------------------
     # Keep original properties of graphs for backward compatibility.
     @property
@@ -133,13 +149,29 @@ class GraphObjectModel(ObjectModel):
 
     @property
     def edge_index(self):
-        if (self._graph is not None) and ("edge_index" in self._graph.keys):
-            return self._graph.edge_index
+        if self._graph is not None:
+            # Newer versions of torch_geometric change `keys` from a
+            # property to a function.
+            # TODO: remove check and use keys function once upgraded to Python 3.10
+            if callable(self._graph.keys):
+                keys = self._graph.keys()
+            else:
+                keys = self._graph.keys
+            if "edge_index" in keys:
+                return self._graph.edge_index
 
     @property
     def edge_attr(self):
-        if (self._graph is not None) and ("edge_attr" in self._graph.keys):
-            return self._graph.edge_attr
+        if self._graph is not None:
+            # Newer versions of torch_geometric change `keys` from a
+            # property to a function.
+            # TODO: remove check and use keys function once upgraded to Python 3.10
+            if callable(self._graph.keys):
+                keys = self._graph.keys()
+            else:
+                keys = self._graph.keys
+            if "edge_attr" in keys:
+                return self._graph.edge_attr
 
     @property
     def num_nodes(self):

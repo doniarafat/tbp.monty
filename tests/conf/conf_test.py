@@ -25,12 +25,24 @@ from unittest_parametrize import ParametrizedTestCase, param, parametrize
 EXPERIMENT_DIR = (
     Path(__file__).parents[2] / "src" / "tbp" / "monty" / "conf" / "experiment"
 )
-EXPERIMENTS = [x.stem for x in EXPERIMENT_DIR.glob("*.yaml")]
+EXPERIMENTS = [
+    x.stem
+    for x in EXPERIMENT_DIR.glob("*.yaml")
+    # Exclude MuJoCo experiments
+    # TODO: Revert once we convert to MuJoCo
+    if not x.stem.endswith("mujoco")
+]
 EXPERIMENT_SNAPSHOTS_DIR = Path(__file__).parent / "snapshots"
 
 TUTORIALS_DIR = EXPERIMENT_DIR / "tutorial"
-TUTORIALS = [x.stem for x in TUTORIALS_DIR.glob("*.yaml")]
-TUTORIAL_SNAPSHOTS_DIR = Path(__file__).parent / "snapshots" / "tutorial"
+TUTORIALS = [
+    x.stem
+    for x in TUTORIALS_DIR.glob("*.yaml")
+    # Exclude MuJoCo tutorials
+    # TODO: Revert once we convert to MuJoCo
+    if not x.stem.endswith("mujoco")
+]
+TUTORIAL_SNAPSHOTS_DIR = EXPERIMENT_SNAPSHOTS_DIR / "tutorial"
 
 
 def _assert_config_matches_snapshot(
@@ -62,17 +74,19 @@ class ExperimentTest(ParametrizedTestCase):
             # force resolving the config for any parsing errors
             OmegaConf.to_object(config)
             current_config_yaml = OmegaConf.to_yaml(config)
+
             try:
                 snapshot_config_yaml = snapshot_path.read_text()
             except FileNotFoundError:
-                snapshot_config_yaml = None
-            if snapshot_config_yaml is not None:
-                _assert_config_matches_snapshot(
-                    current_config_yaml, snapshot_config_yaml, experiment
+                pytest.fail(
+                    f"Missing snapshot file for '{experiment}'\n"
+                    "For more information on how to create or update snapshots"
+                    ", please see the tests/conf/README.md file."
                 )
-            else:
-                with snapshot_path.open("w") as f:
-                    f.write(current_config_yaml)
+
+            _assert_config_matches_snapshot(
+                current_config_yaml, snapshot_config_yaml, experiment
+            )
 
 
 class TutorialTest(ParametrizedTestCase):
@@ -89,14 +103,16 @@ class TutorialTest(ParametrizedTestCase):
             # force resolving the config for any parsing errors
             OmegaConf.to_object(config)
             current_config_yaml = OmegaConf.to_yaml(config)
+
             try:
                 snapshot_config_yaml = snapshot_path.read_text()
             except FileNotFoundError:
-                snapshot_config_yaml = None
-            if snapshot_config_yaml is not None:
-                _assert_config_matches_snapshot(
-                    current_config_yaml, snapshot_config_yaml, tutorial
+                pytest.fail(
+                    f"Missing snapshot file for '{tutorial}'\n"
+                    "For more information on how to create or update snapshots"
+                    ", please see the tests/conf/README.md file."
                 )
-            else:
-                with snapshot_path.open("w") as f:
-                    f.write(current_config_yaml)
+
+            _assert_config_matches_snapshot(
+                current_config_yaml, snapshot_config_yaml, tutorial
+            )

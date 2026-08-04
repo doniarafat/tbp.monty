@@ -7,6 +7,15 @@
 # license that can be found in the LICENSE file or at
 # https://opensource.org/licenses/MIT.
 
+import pytest
+
+from tbp.monty.hydra import instantiate_experiment
+
+pytest.importorskip(
+    "habitat_sim",
+    reason="Habitat Sim optional dependency not installed.",
+)
+
 import tempfile
 import unittest
 
@@ -14,31 +23,22 @@ import hydra
 import numpy as np
 from omegaconf import DictConfig
 
-from tbp.monty.context import RuntimeContext
 from tbp.monty.frameworks.environments.environment import SemanticID
 from tbp.monty.frameworks.environments.positioning_procedures import (
+    GOOD_VIEW_DISTANCE_DEFAULT,
+    GOOD_VIEW_PERCENTAGE_DEFAULT,
     get_perc_on_obj_semantic,
 )
 from tbp.monty.frameworks.experiments.mode import ExperimentMode
-from tbp.monty.frameworks.experiments.object_recognition_experiments import (
-    MontyObjectRecognitionExperiment,
-)
 from tests import HYDRA_ROOT
-
-GOOD_VIEW_PERCENTAGE_DEFAULT = 0.5
-GOOD_VIEW_DISTANCE_DEFAULT = 0.03
 
 
 def hydra_config(test_name: str, output_dir: str) -> DictConfig:
     return hydra.compose(
-        config_name="test",
+        config_name="experiment",
         overrides=[
-            f"test=integration/positioning_procedures/get_good_view/{test_name}",
-            f"test.config.logging.output_dir={output_dir}",
-            f"+test.config.train_env_interface_args.good_view_percentage={GOOD_VIEW_PERCENTAGE_DEFAULT}",
-            f"+test.config.train_env_interface_args.good_view_distance={GOOD_VIEW_DISTANCE_DEFAULT}",
-            f"+test.config.eval_env_interface_args.good_view_percentage={GOOD_VIEW_PERCENTAGE_DEFAULT}",
-            f"+test.config.eval_env_interface_args.good_view_distance={GOOD_VIEW_DISTANCE_DEFAULT}",
+            f"experiment=test/integration/positioning_procedures/get_good_view/{test_name}",
+            f"experiment.config.logging.output_dir={output_dir}",
         ],
     )
 
@@ -58,7 +58,11 @@ class GetGoodViewTest(unittest.TestCase):
         """
         with hydra.initialize_config_dir(version_base=None, config_dir=str(HYDRA_ROOT)):
             config = hydra_config("dist_agent_too_far_away", self.output_dir)
-            exp: MontyObjectRecognitionExperiment = hydra.utils.instantiate(config.test)
+            agent_cfg = config.experiment.config.environment.env_init_args.agents
+            agent_id = config.experiment.config.train_env_interface_args[
+                "positioning_procedures"
+            ][0].agent_id
+            exp = instantiate_experiment(config.experiment)
             with exp:
                 exp.experiment_mode = ExperimentMode.TRAIN
                 exp.model.set_experiment_mode(exp.experiment_mode)
@@ -68,15 +72,17 @@ class GetGoodViewTest(unittest.TestCase):
                 target_perc_on_target_obj = GOOD_VIEW_PERCENTAGE_DEFAULT
                 target_closest_point = GOOD_VIEW_DISTANCE_DEFAULT
 
-                ctx = RuntimeContext(rng=exp.rng)
-                observation = exp.env_interface.step(ctx, first=True)
-                view = observation[exp.model.motor_system._policy.agent_id][
-                    "view_finder"
-                ]
+                observation, state = exp.env_interface.step([])
+                view = observation[agent_id]["view_finder"]
                 semantic = view["semantic_3d"][:, 3].reshape(view["depth"].shape)
                 perc_on_target_obj = get_perc_on_obj_semantic(
                     semantic, semantic_id=SemanticID(1)
                 )
+
+                # Make sure we've actually moved
+                assert not np.allclose(
+                    state[agent_id].position, agent_cfg.agent_args.position
+                ), "Agent did not move."
 
                 assert perc_on_target_obj >= target_perc_on_target_obj, (
                     f"Initial view is not good enough, {perc_on_target_obj} "
@@ -106,7 +112,11 @@ class GetGoodViewTest(unittest.TestCase):
         """
         with hydra.initialize_config_dir(version_base=None, config_dir=str(HYDRA_ROOT)):
             config = hydra_config("multi_object_target_not_visible", self.output_dir)
-            exp: MontyObjectRecognitionExperiment = hydra.utils.instantiate(config.test)
+            agent_cfg = config.experiment.config.environment.env_init_args.agents
+            agent_id = config.experiment.config.train_env_interface_args[
+                "positioning_procedures"
+            ][0].agent_id
+            exp = instantiate_experiment(config.experiment)
             with exp:
                 exp.train()
 
@@ -118,15 +128,17 @@ class GetGoodViewTest(unittest.TestCase):
                 target_perc_on_target_obj = GOOD_VIEW_PERCENTAGE_DEFAULT
                 target_closest_point = GOOD_VIEW_DISTANCE_DEFAULT
 
-                ctx = RuntimeContext(rng=exp.rng)
-                observation = exp.env_interface.step(ctx, first=True)
-                view = observation[exp.model.motor_system._policy.agent_id][
-                    "view_finder"
-                ]
+                observation, state = exp.env_interface.step([])
+                view = observation[agent_id]["view_finder"]
                 semantic = view["semantic_3d"][:, 3].reshape(view["depth"].shape)
                 perc_on_target_obj = get_perc_on_obj_semantic(
                     semantic, semantic_id=SemanticID(1)
                 )
+
+                # Make sure we've actually moved
+                assert not np.allclose(
+                    state[agent_id].position, agent_cfg.agent_args.position
+                ), "Agent did not move."
 
                 assert perc_on_target_obj >= target_perc_on_target_obj, (
                     f"Initial view is not good enough, {perc_on_target_obj} "

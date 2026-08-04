@@ -22,7 +22,6 @@ import numpy as np
 from matplotlib import animation
 from matplotlib.figure import Figure
 from mpl_toolkits.mplot3d.axes3d import Axes3D
-from scipy.spatial.transform import Rotation
 from torch_geometric.data import Data
 
 from tbp.monty.frameworks.actions.actions import Action
@@ -34,7 +33,7 @@ from tbp.monty.frameworks.utils.plot_utils import (
     add_patch_outline_to_view_finder,
 )
 from tbp.monty.frameworks.utils.spatial_arithmetics import get_angle
-from tbp.monty.frameworks.utils.transform_utils import numpy_to_scipy_quat
+from tbp.monty.geometry import Rotation
 
 
 def plot_graph(
@@ -147,27 +146,32 @@ def get_action_name(
         "None".
     """
     if is_match_step:
-        if obs_on_object:
-            action_name = "updating possible matches"
-        else:
-            action_name = "patch not on object"
-    elif step == 0:
-        action_name = "not moved yet"
-    else:
-        action = action_stats[step - 1]
-        if action[0] is not None:
-            a = cast("Action", action[0])
-            d = dict(a)
-            del d["action"]  # don't duplicate action in "params"
-            del d["agent_id"]  # don't duplicate agent_id in "params"
-            params = [
-                f"{k}:{v.tolist()}" if isinstance(v, np.ndarray) else f"{k}:{v}"
-                for k, v in d.items()
-            ]
-            action_name = f"{a.name} - {','.join(params)}"
-        else:
-            action_name = "None"
-    return action_name
+        return "updating possible matches" if obs_on_object else "patch not on object"
+
+    if step == 0:
+        return "not moved yet"
+
+    actions = action_stats[step - 1][0]
+    if not actions:
+        return "None"
+
+    action_strings = []
+    for action in actions:
+        a = cast("Action", action)
+        d = dict(a)
+        del d["action"]  # don't duplicate action in "params"
+        del d["agent_id"]  # don't duplicate agent_id in "params"
+        params = [
+            f"{k}:{v.tolist()}" if isinstance(v, np.ndarray) else f"{k}:{v}"
+            for k, v in d.items()
+        ]
+        action_strings.append(f"{a.name} - {','.join(params)}")
+
+    return (
+        action_strings[0]
+        if len(action_strings) == 1
+        else "[" + ", ".join(action_strings) + "]"
+    )
 
 
 def set_target_text(ax, target, num_objects):
@@ -808,12 +812,10 @@ class PolicyPlot:
             self.object_id
         ].pos
 
-        converted_quat = numpy_to_scipy_quat(
-            self.detailed_stats[str(self.episode)]["target"][
-                "primary_target_rotation_quat"
-            ]
-        )
-        object_rot = Rotation.from_quat(converted_quat)
+        quat = self.detailed_stats[str(self.episode)]["target"][
+            "primary_target_rotation_quat"
+        ]
+        object_rot = Rotation.from_quat(quat)
 
         # Update orientation and position of the learned model
         # to be consistent with [lm]["locations"] (which are in body-centric
@@ -867,16 +869,14 @@ class PolicyPlot:
         # movements)
         self.tangential_steps_mask = []
         if self.agent_type == "surface":
-            for current_action in self.detailed_stats[str(self.episode)][
+            for actions_state_pair in self.detailed_stats[str(self.episode)][
                 "motor_system"
             ]["action_sequence"]:
-                if current_action[0] is not None:
-                    self.tangential_steps_mask.append(
-                        "move_tangentially" in current_action[0]
-                    )
-                else:
-                    # First movement is associated with [None, None]
-                    self.tangential_steps_mask.append(False)
+                actions = actions_state_pair[0]
+                is_tangential_step = any(
+                    "move_tangentially" in action["name"] for action in actions
+                )
+                self.tangential_steps_mask.append(is_tangential_step)
             self.tangential_steps_mask = np.array(self.tangential_steps_mask)
         elif self.agent_type == "distant":
             # For distant-agent, we count any steps that were on the object as
@@ -1026,11 +1026,9 @@ class PolicyPlot:
             ]["post_jump_pose"][idx_jump][AgentID("agent_id_0")].position
 
             temp_agent_rot = Rotation.from_quat(
-                numpy_to_scipy_quat(
-                    self.detailed_stats[str(self.episode)]["motor_system"][
-                        "action_details"
-                    ]["post_jump_pose"][idx_jump][AgentID("agent_id_0")].rotation
-                )
+                self.detailed_stats[str(self.episode)]["motor_system"][
+                    "action_details"
+                ]["post_jump_pose"][idx_jump][AgentID("agent_id_0")].rotation
             )
 
             # === PLOT SENSOR POSE ===
@@ -1043,7 +1041,7 @@ class PolicyPlot:
                 for x in self.detailed_stats[str(self.episode)]["motor_system"][
                     "action_details"
                 ]["post_jump_pose"][idx_jump][AgentID("agent_id_0")].sensors
-                if "patch" in x and ".depth" in x
+                if "patch" in x
             ]
 
             for sensor_key in sensors_to_plot:
@@ -1056,13 +1054,11 @@ class PolicyPlot:
                 )
 
                 partial_sensor_rot = Rotation.from_quat(
-                    numpy_to_scipy_quat(
-                        self.detailed_stats[str(self.episode)]["motor_system"][
-                            "action_details"
-                        ]["post_jump_pose"][idx_jump][AgentID("agent_id_0")]
-                        .sensors[sensor_key]
-                        .rotation
-                    )
+                    self.detailed_stats[str(self.episode)]["motor_system"][
+                        "action_details"
+                    ]["post_jump_pose"][idx_jump][AgentID("agent_id_0")]
+                    .sensors[sensor_key]
+                    .rotation
                 )
                 temp_sensor_rot = (
                     temp_agent_rot * partial_sensor_rot
@@ -1145,11 +1141,9 @@ class PolicyPlot:
                 "sm_properties"
             ][np.where(self.tangential_steps_mask)[0][step_iter]]["sm_location"]
             sensor_rot = Rotation.from_quat(
-                numpy_to_scipy_quat(
-                    self.detailed_stats[str(self.episode)][sensor_key]["sm_properties"][
-                        np.where(self.tangential_steps_mask)[0][step_iter]
-                    ]["sm_rotation"]
-                )
+                self.detailed_stats[str(self.episode)][sensor_key]["sm_properties"][
+                    np.where(self.tangential_steps_mask)[0][step_iter]
+                ]["sm_rotation"]
             )
 
             # As the agent faces "forward" along the negative z-axis, we use this vector
@@ -1265,10 +1259,8 @@ def plot_learned_graph(
     # This is based on the *LM's model*, but always getting the ground-truth object,
     learned_model_cloud = lm_models["pretrained"][lm_index][object_id].pos
 
-    converted_quat = numpy_to_scipy_quat(
-        detailed_stats[str(episode)]["target"]["primary_target_rotation_quat"]
-    )
-    object_rot = Rotation.from_quat(converted_quat)
+    quat = detailed_stats[str(episode)]["target"]["primary_target_rotation_quat"]
+    object_rot = Rotation.from_quat(quat)
 
     # Update orientation and position of the learned model to be in environmental
     # coordinates
@@ -1585,7 +1577,7 @@ def plot_evidence_transitions(
 
     Currently this shares code with the detection of when the LM is on a new
     object; this will be refactored in the next PR (TODO) alongside the
-    goal-state-generator class.
+    goal generator class.
 
     Args:
         episode: Episode number.

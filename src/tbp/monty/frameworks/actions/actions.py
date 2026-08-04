@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from json import JSONDecoder, JSONEncoder
-from typing import Any, Generator, Tuple
+from typing import TYPE_CHECKING, Any, Generator
 
 from numpy.random import RandomState
 from pydantic.alias_generators import to_snake
@@ -20,9 +20,11 @@ from typing_extensions import (
     runtime_checkable,  # For JSONEncoder instance checks
 )
 
-from tbp.monty.frameworks.agents import AgentID
+if TYPE_CHECKING:
+    from tbp.monty.frameworks.agents import AgentID
+    from tbp.monty.math import QuaternionWXYZ, VectorXYZ
 
-__all__ = [  # noqa: RUF022
+__all__ = [
     # Actions
     "Action",
     "LookDown",
@@ -67,13 +69,7 @@ __all__ = [  # noqa: RUF022
     "TurnRight",
     "TurnRightActionSampler",
     "TurnRightActuator",
-    # Spatial representations
-    "QuaternionWXYZ",
-    "VectorXYZ",
 ]
-
-VectorXYZ = Tuple[float, float, float]
-QuaternionWXYZ = Tuple[float, float, float, float]
 
 
 @runtime_checkable
@@ -120,6 +116,10 @@ class Action(Protocol):
             if key == "name":
                 continue
             yield key, value
+
+    def __repr__(self) -> str:
+        attrs = ", ".join([f"{k}={v}" for k, v in self.__dict__.items()])
+        return f"{self.__class__.__name__}({attrs})"
 
 
 class LookDownActionSampler(Protocol):
@@ -379,7 +379,10 @@ class SetAgentPose(Action):
         return sampler.sample_set_agent_pose(agent_id, rng)
 
     def __init__(
-        self, agent_id: AgentID, location: VectorXYZ, rotation_quat: QuaternionWXYZ
+        self,
+        agent_id: AgentID,
+        location: VectorXYZ,
+        rotation_quat: QuaternionWXYZ,
     ) -> None:
         super().__init__(agent_id=agent_id)
         self.location = location
@@ -444,7 +447,10 @@ class SetSensorPose(Action):
         return sampler.sample_set_sensor_pose(agent_id, rng)
 
     def __init__(
-        self, agent_id: AgentID, location: VectorXYZ, rotation_quat: QuaternionWXYZ
+        self,
+        agent_id: AgentID,
+        location: VectorXYZ,
+        rotation_quat: QuaternionWXYZ,
     ) -> None:
         super().__init__(agent_id=agent_id)
         self.location = location

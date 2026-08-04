@@ -65,11 +65,10 @@ __all__ = [
 from tbp.monty.frameworks.environments.environment import (
     ObjectID,
     ObjectInfo,
-    QuaternionWXYZ,
     SemanticID,
-    VectorXYZ,
+    SimulatedObjectEnvironment,
 )
-from tbp.monty.simulators.simulator import Simulator
+from tbp.monty.math import QuaternionWXYZ, VectorXYZ
 
 DEFAULT_SCENE = "NONE"
 DEFAULT_PHYSICS_CONFIG = str(files(resources) / "default.physics_config.json")
@@ -85,7 +84,7 @@ PRIMITIVE_OBJECT_TYPES = {
 }
 
 
-class HabitatSim(HabitatActuator, Simulator):
+class HabitatSim(HabitatActuator, SimulatedObjectEnvironment):
     """habitat-sim interface for tbp.monty.
 
     This class wraps `habitat-sim <https://aihabitat.org/docs/habitat-sim>`_
@@ -181,7 +180,7 @@ class HabitatSim(HabitatActuator, Simulator):
                 # json files with the attributes of each object in the dataset.
                 # The json file name is in this format:
                 # "{object_name}.object_config.json".
-                # See https://aihabitat.org/docs/habitat-sim/attributesJSON.html#objectattributes # noqa: E501
+                # See https://aihabitat.org/docs/habitat-sim/attributesJSON.html#objectattributes
                 objects_data_path = {
                     f.parent for f in objects_path.glob("*/**/*.object_config.json")
                 }
@@ -273,7 +272,7 @@ class HabitatSim(HabitatActuator, Simulator):
         obj = rigid_mgr.add_object_by_template_handle(obj_handle)
 
         # Update pose
-        obj.translation = position
+        obj.translation = mn.Vector3d(position)
         if isinstance(rotation, (list, tuple)):
             rotation = qt.quaternion(*rotation)
         obj.rotation = sim_utils.quat_to_magnum(rotation)
@@ -594,25 +593,33 @@ class HabitatSim(HabitatActuator, Simulator):
 
     @property
     def states(self) -> ProprioceptiveState:
-        """Returns proprioceptive state of the agents and sensors."""
+        """Returns proprioceptive state of the agents and sensors.
+
+        Note: A Monty RGBD sensor is represented by separate RGBA and depth sensors in
+        Habitat (and a separate semantic sensor, if enabled). Their positions and
+        rotations are identical (they belong to the same body), so we arbitrarily
+        return the position and rotation from whichever sensor we see first.
+        """
         result = ProprioceptiveState()
         for agent_index, sim_agent in enumerate(self._sim.agents):
             # Get agent and sensor poses from simulator
             agent_node = sim_agent.scene_node
-
+            agent = self._agents[agent_index]
             sensors: dict[SensorID, SensorState] = {}
             for sensor_id, sensor in agent_node.node_sensors.items():
+                monty_id, _ = agent.habitat_sensor_to_monty_id_modality_map[sensor_id]
+                if monty_id in sensors:
+                    continue
                 rotation = sim_utils.quat_from_magnum(sensor.node.rotation)
-                sensors[SensorID(sensor_id)] = SensorState(
-                    position=sensor.node.translation,
+                sensors[monty_id] = SensorState(
+                    position=tuple(sensor.node.translation),
                     rotation=rotation,
                 )
 
             # Update agent/module state
-            agent_id = self._agents[agent_index].agent_id
             rotation = sim_utils.quat_from_magnum(agent_node.rotation)
-            result[agent_id] = AgentState(
-                position=agent_node.translation,
+            result[agent.agent_id] = AgentState(
+                position=tuple(agent_node.translation),
                 rotation=rotation,
                 sensors=sensors,
             )

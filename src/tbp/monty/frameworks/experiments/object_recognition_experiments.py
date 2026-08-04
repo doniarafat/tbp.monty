@@ -7,15 +7,17 @@
 # Use of this source code is governed by the MIT
 # license that can be found in the LICENSE file or at
 # https://opensource.org/licenses/MIT.
+from __future__ import annotations
 
 import logging
 
 import torch
 
 from tbp.monty.context import RuntimeContext
-from tbp.monty.frameworks.environments.embodied_data import (
-    SaccadeOnImageEnvironmentInterface,
+from tbp.monty.experiment.environment import (
+    SaccadeOnImageInterface,
 )
+from tbp.monty.frameworks.actions.actions import Action
 from tbp.monty.frameworks.experiments.mode import ExperimentMode
 from tbp.monty.frameworks.experiments.monty_experiment import (
     MontyExperiment,
@@ -44,7 +46,7 @@ class MontyObjectRecognitionExperiment(MontyExperiment):
         last_step = self.run_episode_steps()
         self.post_episode(last_step)
 
-    def pre_episode(self):
+    def pre_episode(self) -> None:
         """Pre-episode hook.
 
         Passes the primary target object and the mapping from semantic IDs to labels
@@ -63,20 +65,20 @@ class MontyObjectRecognitionExperiment(MontyExperiment):
 
         self.reset_episode_rng()
 
+        self._restore_monty()
+
         # TODO, eventually it would be better to pass
         # self.env_interface.semantic_id_to_label via an "Observation" object when this
         # is eventually implemented, such that we can ensure this information is never
         # inappropriately accessed and used
         if hasattr(self.env_interface, "semantic_id_to_label"):
-            # TODO: Fix invalid pre_episode signature call
-            self.model.pre_episode(
-                self.rng,
+            self.model.fixme_set_ground_truth(
                 self.env_interface.primary_target,
                 self.env_interface.semantic_id_to_label,
             )
         else:
-            # TODO: Fix invalid pre_episode signature call
-            self.model.pre_episode(self.rng, self.env_interface.primary_target)
+            self.model.fixme_set_ground_truth(self.env_interface.primary_target)
+
         self.env_interface.pre_episode(self.rng)
 
         self.max_steps = self.max_train_steps
@@ -88,7 +90,7 @@ class MontyObjectRecognitionExperiment(MontyExperiment):
         if self.show_sensor_output:
             self.live_plotter.initialize_online_plotting()
 
-    def run_episode_steps(self):
+    def run_episode_steps(self) -> int:
         """Runs one episode of the experiment.
 
         At each step, observations are collected from the env_interface and either
@@ -100,24 +102,13 @@ class MontyObjectRecognitionExperiment(MontyExperiment):
         """
         step = 0
         ctx = RuntimeContext(rng=self.rng)
+        actions: list[Action] = []
         while True:
-            try:
-                observations = self.env_interface.step(ctx, first=(step == 0))
-            except StopIteration:
-                # TODO: StopIteration is being thrown by NaiveScanPolicy to signal
-                #       episode termination. This is a holdover from when we used
-                #       iterators. However, this also abdicates control of the
-                #       experiment to the policy. We should find a better way to handle
-                #       this, so that the experiment can control the episode termination
-                #       fully. For example, we know how many steps the policy will take,
-                #       so the experiment can set max steps based on that knowledge
-                #       alone.
-                self.model.set_is_done()
-                return step
+            observations, proprioceptive_state = self.env_interface.step(actions)
 
             if self.show_sensor_output:
                 is_saccade_on_image_data_loader = isinstance(
-                    self.env_interface, SaccadeOnImageEnvironmentInterface
+                    self.env_interface, SaccadeOnImageInterface
                 )
                 self.live_plotter.show_observations(
                     *self.live_plotter.hardcoded_assumptions(observations, self.model),
@@ -138,15 +129,33 @@ class MontyObjectRecognitionExperiment(MontyExperiment):
                 self.model.deal_with_time_out()
                 return step
 
-            if self.model.is_motor_only_step:
-                logger.debug(
-                    "Performing a motor-only step, so passing info straight to motor"
-                )
-                # On these sensations, we just want to pass information to the motor
-                # system, so bypass the main model step (i.e. updating of LMs)
-                self.model.pass_features_directly_to_motor_system(observations)
-            else:
-                self.model.step(observations)
+            try:
+                if self.model.is_motor_only_step:
+                    logger.debug("Performing a motor-only step")
+                    actions = self.model.motor_only_step(
+                        ctx, observations, proprioceptive_state
+                    )
+                else:
+                    actions = self.model.step(ctx, observations, proprioceptive_state)
+                    actions = self._step_hook(
+                        ctx,
+                        self.model,
+                        self.supervised_lm_ids if self.supervised_lm_ids else [],
+                        step,
+                        observations,
+                        actions,
+                    )
+            except StopIteration:
+                # TODO: StopIteration is being thrown by NaiveScanPolicy to signal
+                #       episode termination. This is a holdover from when we used
+                #       iterators. However, this also abdicates control of the
+                #       experiment to the policy. We should find a better way to handle
+                #       this, so that the experiment can control the episode termination
+                #       fully. For example, we know how many steps the policy will take,
+                #       so the experiment can set max steps based on that knowledge
+                #       alone.
+                self.model.set_is_done()
+                return step
 
             if self.model.is_done:
                 # Check this right after step to avoid setting time out
@@ -163,7 +172,7 @@ class MontyGeneralizationExperiment(MontyObjectRecognitionExperiment):
         """Pre episode where we pass target object to the model for logging."""
         if "model.pt" not in self.model_path.parts:
             model_path = self.model_path / "model.pt"
-        state_dict = torch.load(model_path)
+        state_dict = torch.load(model_path, weights_only=False)
         print(f"loading models again from {model_path}")
         self.model.load_state_dict(state_dict)
         super().pre_episode()

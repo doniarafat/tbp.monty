@@ -15,14 +15,14 @@ import math
 from itertools import permutations
 
 import numpy as np
-from scipy.spatial.transform import Rotation
 
 from tbp.monty.frameworks.utils.spatial_arithmetics import get_more_directions_in_plane
+from tbp.monty.geometry import Rotation
 
 logger = logging.getLogger(__name__)
 
 
-def get_correct_k_n(k_n, num_datapoints):
+def get_correct_k_n(k_n: int, num_datapoints: int) -> int | None:
     """Determine k_n given the number of datapoints.
 
     The k_n specified in the hyperparameter may not be possible to achieve with the
@@ -318,7 +318,7 @@ def get_custom_distances(nearest_node_locs, search_locs, search_sns, search_curv
 
 
 # ====== Functions for detecting on new object ======
-# TODO: These will be integrated into the goal-state-generator with the motor
+# TODO: These will be integrated into the goal generator with the motor
 # system refactor
 def create_exponential_kernel(size, decay_rate):
     """Create an exponentially decaying kernel.
